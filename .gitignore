@@ -44,3 +44,6 @@ __screenshots__/
 
 test-results/
 playwright-report/
+
+# 部署脚本（含本机路径，不入库）
+deploy.sh
