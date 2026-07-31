@@ -219,18 +219,40 @@ async function submit() {
 
 // ===== 打包下载 =====
 
-async function downloadArchive() {
+// 直接浏览器下载：先 HEAD 探测可用性，再触发原生下载。
+// 不用 fetch+blob —— 大文件 double-buffer 会卡顿甚至 ERR_FAILED。
+async function directDownload(url) {
+  let head = null
   try {
-    const res = await fetch('/api/ncmdump/archive.zip', { credentials: 'include' })
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}))
-      error.value = d.detail || ('打包失败 ' + res.status)
-      return
-    }
-    const blob = await res.blob()
-    triggerDownload(blob, 'ncm_outputs.zip')
-  } catch (e) {
-    error.value = '打包失败：' + e.message
+    head = await fetch(url, { method: 'HEAD', credentials: 'include' })
+  } catch {
+    return null
+  }
+  if (!head.ok) return head
+  const a = document.createElement('a')
+  a.href = url
+  a.download = ''
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  return head
+}
+
+async function downloadArchive() {
+  const head = await directDownload('/api/ncmdump/archive.zip')
+  if (!head) {
+    error.value = '打包失败：网络错误'
+    return
+  }
+  if (!head.ok) {
+    let detail = '打包失败 ' + head.status
+    try {
+      const d = await head.json()
+      if (typeof d.detail === 'string') detail = d.detail
+    } catch { /* 忽略 */ }
+    error.value = detail
+    return
   }
 }
 
@@ -294,38 +316,15 @@ async function cancelJob(job) {
   } catch { /* 忽略 */ }
 }
 
-// 触发下载并延迟释放 blob URL（立即 revoke 会导致大文件下载被浏览器中断）
-function triggerDownload(blob, name) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 60000)
-}
-
 async function downloadJob(job) {
   if (downloaded.value.has(job.id)) return
-  try {
-    const res = await fetch(job.download_url, { credentials: 'include' })
-    if (!res.ok) {
-      error.value = '结果已过期（保留 1 小时），请重新转换'
-      await refresh()
-      return
-    }
-    const blob = await res.blob()
-    const cd = res.headers.get('Content-Disposition') || ''
-    const unicode = cd.match(/filename\*=UTF-8''([^;]+)/i)
-    const ascii = cd.match(/filename="([^"]+)"/i)
-    const name = unicode ? decodeURIComponent(unicode[1]) : ascii ? ascii[1] : job.result_filename || 'output'
-    triggerDownload(blob, name)
-    downloaded.value.add(job.id)
-  } catch (e) {
-    error.value = '下载失败：' + e.message
+  const head = await directDownload(job.download_url)
+  if (!head || !head.ok) {
+    error.value = '结果已过期（保留 1 小时），请重新转换'
+    await refresh()
+    return
   }
+  downloaded.value.add(job.id)
 }
 
 function canDownload(job) {
