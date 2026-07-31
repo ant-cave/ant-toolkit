@@ -3,15 +3,13 @@
 <!-- https://github.com/ant-cave -->
 
 <script setup>
-// fastcurl 工具页：图形化 curl
+// fastcurl 工具页：图形化 curl（登录在顶栏全局处理）
 import { onMounted } from 'vue'
 import { useRequestStore } from '../stores/request'
 import RequestPanel from '../components/curl/RequestPanel.vue'
 import ResponsePanel from '../components/curl/ResponsePanel.vue'
 import CurlCommand from '../components/curl/CurlCommand.vue'
 import HistoryPanel from '../components/curl/HistoryPanel.vue'
-import LoginButton from '../components/curl/LoginButton.vue'
-import OAuthCallbackHandler from '../components/curl/OAuthCallbackHandler.vue'
 
 const store = useRequestStore()
 
@@ -22,16 +20,10 @@ onMounted(() => {
 
 <template>
   <div>
-    <!-- OAuth 回调处理 -->
-    <OAuthCallbackHandler />
-
     <!-- 工具页头 -->
     <div class="mb-4 flex items-center gap-2">
       <span class="font-mono text-base font-bold text-neutral-900 dark:text-neutral-100">fastcurl</span>
       <span class="text-xs text-neutral-400 dark:text-neutral-500">图形化 curl 工具</span>
-      <div class="ml-auto">
-        <LoginButton />
-      </div>
     </div>
 
     <!-- 主内容 -->

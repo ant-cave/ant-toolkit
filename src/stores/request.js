@@ -55,9 +55,9 @@ const LLM_PRESETS = [
   }
 ]
 
-const DEV = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-const API_BASE = DEV ? '' : 'https://backend.api.011420.xyz'
-const AUTH_BASE = DEV ? '/api/auth' : 'https://backend.api.011420.xyz/api/auth'
+// 前后端同源部署：生产由 nginx 将 /api、/login 反代到后端，本地开发由 vite 代理到本机后端
+const API_BASE = ''
+const AUTH_BASE = '/api/auth'
 
 export const useRequestStore = defineStore('request', () => {
   // 认证
@@ -82,8 +82,8 @@ export const useRequestStore = defineStore('request', () => {
 
   async function login() {
     try {
-      // OAuth 完成后回跳当前站点的 curl 工具页
-      const redirect = encodeURIComponent(`${location.origin}${location.pathname}#/tools/curl`)
+      // OAuth 完成后回跳当前页面（保留 hash 路由）
+      const redirect = encodeURIComponent(`${location.origin}${location.pathname}${location.hash}`)
       const res = await fetch(`${AUTH_BASE}/login?redirect=${redirect}`, { credentials: 'include' })
       if (!res.ok) throw new Error('Login failed')
       const data = await res.json()

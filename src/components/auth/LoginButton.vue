@@ -2,6 +2,13 @@
 <!-- Copyright (C) 2026 ant-cave <ANTmmmmm@outlook.com> -->
 <!-- https://github.com/ant-cave -->
 
+<script setup>
+// 全局登录按钮：显示登录 / 用户名 / 退出，挂在顶栏
+import { useRequestStore } from '../../stores/request'
+
+const store = useRequestStore()
+</script>
+
 <template>
   <div class="flex items-center gap-2">
     <div v-if="store.authLoading" class="text-xs text-neutral-400 dark:text-neutral-500">检查登录...</div>
@@ -20,9 +27,3 @@
     </template>
   </div>
 </template>
-
-<script setup>
-import { useRequestStore } from '../../stores/request'
-
-const store = useRequestStore()
-</script>

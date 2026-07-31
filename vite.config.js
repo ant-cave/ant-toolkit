@@ -26,9 +26,14 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // fastcurl 后端代理（开发时后端跑在 localhost:8000）
+      // 后端（ant-toolkit-backend，本地跑在 8010；8000 被 ant-cave-backend 占用）
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8010',
+        changeOrigin: true,
+      },
+      // OAuth 回调路径同样反代到后端
+      '/login': {
+        target: 'http://localhost:8010',
         changeOrigin: true,
       },
     },

@@ -9,6 +9,8 @@
 </template>
 
 <script setup>
+// OAuth 回调处理：若 URL 中带有 code/state（兼容旧式前端换 token 流程），
+// 交给后端完成换取并回跳；后端 BFF 模式已直接处理回调时这里为空操作。
 import { ref, onMounted } from 'vue'
 import { useRequestStore } from '../../stores/request'
 
