@@ -20,6 +20,9 @@ const file = ref(null)
 const converting = ref(false)
 const error = ref('')
 const success = ref('')
+// 后端返回的转换日志与下载地址
+const log = ref('')
+const downloadUrl = ref('')
 
 // 已选文件大小格式化
 const fileSize = computed(() => {
@@ -42,6 +45,7 @@ function onDrop(e) {
     file.value = f
     error.value = ''
     success.value = ''
+    log.value = ''
   }
 }
 
@@ -51,6 +55,7 @@ function onFileChange(e) {
     file.value = f
     error.value = ''
     success.value = ''
+    log.value = ''
   }
   e.target.value = ''
 }
@@ -59,11 +64,22 @@ function clearFile() {
   file.value = null
   error.value = ''
   success.value = ''
+  log.value = ''
+}
+
+// 从响应头解析文件名（优先 RFC5987 中文名）
+function parseFilename(cd, fallback) {
+  const unicode = cd.match(/filename\*=UTF-8''([^;]+)/i)
+  const ascii = cd.match(/filename="([^"]+)"/i)
+  if (unicode) return decodeURIComponent(unicode[1])
+  if (ascii) return ascii[1]
+  return fallback
 }
 
 async function convert() {
   error.value = ''
   success.value = ''
+  log.value = ''
   if (!file.value) return
   converting.value = true
   try {
@@ -71,35 +87,39 @@ async function convert() {
     fd.append('file', file.value)
     const res = await fetch('/api/ncmdump', { method: 'POST', body: fd, credentials: 'include' })
 
-    if (res.status === 401) {
-      error.value = '登录已过期，请重新登录'
-      return
-    }
-    if (res.status === 413) {
-      error.value = '文件过大（上限 200MB）'
-      return
-    }
+    // 失败：展示后端详情与转换日志
     if (!res.ok) {
-      // 尝试读取后端的错误详情
-      let msg = '转换失败'
+      let detail = '转换失败'
       try {
         const data = await res.json()
-        if (typeof data.detail === 'string' && data.detail) msg = data.detail
+        if (typeof data.detail === 'string' && data.detail) detail = data.detail
+        if (typeof data.log === 'string') log.value = data.log
       } catch { /* 忽略非 JSON 响应 */ }
-      error.value = msg
+      if (res.status === 401) detail = '登录已过期，请重新登录'
+      if (res.status === 413) detail = '文件过大（上限 200MB）'
+      error.value = detail
       return
     }
 
-    // 从响应头解析原始文件名（优先 RFC5987 中文名）
-    const blob = await res.blob()
-    const cd = res.headers.get('Content-Disposition') || ''
-    const unicode = cd.match(/filename\*=UTF-8''([^;]+)/i)
-    const ascii = cd.match(/filename="([^"]+)"/i)
-    const filename = unicode
-      ? decodeURIComponent(unicode[1])
-      : ascii ? ascii[1] : file.value.name.replace(/\.ncm$/i, '') + '_unlocked'
+    // 成功：拿到日志 + 一次性下载地址
+    const data = await res.json()
+    log.value = data.log || ''
+    downloadUrl.value = data.download_url || ''
+    const fallbackName = file.value.name.replace(/\.ncm$/i, '') + '_unlocked'
 
-    // 触发下载
+    if (!downloadUrl.value) {
+      error.value = '转换成功但未获取到下载地址'
+      return
+    }
+
+    // 拉取转换结果并触发下载
+    const dl = await fetch(downloadUrl.value, { credentials: 'include' })
+    if (!dl.ok) {
+      error.value = '下载失败，请重新转换'
+      return
+    }
+    const blob = await dl.blob()
+    const filename = parseFilename(dl.headers.get('Content-Disposition') || '', fallbackName)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -183,6 +203,12 @@ async function convert() {
       <p v-if="success" class="rounded-sm border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
         {{ success }}
       </p>
+
+      <!-- 转换日志 -->
+      <div v-if="log" class="rounded-sm border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
+        <label class="mb-2 block text-xs text-neutral-500 dark:text-neutral-400">转换日志</label>
+        <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-sm border border-neutral-200 bg-neutral-950 p-3 font-mono text-xs leading-relaxed text-neutral-300 dark:border-neutral-800">{{ log || '（无输出）' }}</pre>
+      </div>
     </template>
   </ToolPage>
 </template>
