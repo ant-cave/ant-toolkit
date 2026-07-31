@@ -108,6 +108,11 @@ const router = createRouter({
       path: '/tools/image-convert',
       name: 'image-convert',
       component: () => import('../views/tools/ImageConvertView.vue')
+    },
+    {
+      path: '/tools/ncmdump',
+      name: 'ncmdump',
+      component: () => import('../views/tools/NcmDumpView.vue')
     }
   ]
 })

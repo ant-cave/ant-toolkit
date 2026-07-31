@@ -27,6 +27,7 @@ function makeRouter() {
       { path: '/tools/uuid', component: () => import('../views/tools/UuidView.vue') },
       { path: '/tools/unit-convert', component: () => import('../views/tools/UnitConvertView.vue') },
       { path: '/tools/date-calc', component: () => import('../views/tools/DateCalcView.vue') },
+      { path: '/tools/ncmdump', component: () => import('../views/tools/NcmDumpView.vue') },
     ],
   })
 }
@@ -111,6 +112,7 @@ describe('App', () => {
     ['/tools/uuid', 'UUID 生成'],
     ['/tools/unit-convert', '单位换算'],
     ['/tools/date-calc', '日期计算器'],
+    ['/tools/ncmdump', 'NCM 解锁'],
   ])('小工具页 %s 可访问', async (path, title) => {
     const router = makeRouter()
     const wrapper = mount(App, {

@@ -144,7 +144,13 @@ export const onlineCategories = [
     id: 'media',
     name: '音视频',
     icon: 'movie',
-    tools: []
+    tools: [
+      {
+        name: 'NCM 解锁',
+        url: '/tools/ncmdump',
+        description: '将 .ncm 加密音乐转为通用格式（需登录）'
+      }
+    ]
   }
 ]
 
