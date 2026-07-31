@@ -13,7 +13,9 @@
   "dependencies": {
     "diff": "^9.0.0",
     "js-md5": "^0.9.2",
+    "jszip": "^3.10.1",
     "marked": "^18.0.7",
+    "ncmdump-js": "^0.0.1",
     "pinia": "^4.0.2",
     "qrcode": "^1.5.4",
     "vue": "^3.5.40",

@@ -71,9 +71,9 @@ test('navigates to password generator tool', async ({ page }) => {
   await expect(page.locator('body')).toContainText('密码长度')
 })
 
-test('ncmdump tool requires login', async ({ page }) => {
+test('ncmdump tool works without login', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('link', { name: /NCM 解锁/ }).click()
-  await expect(page.locator('body')).toContainText('将 .ncm 加密音乐转为通用格式')
-  await expect(page.locator('body')).toContainText('使用该工具需要登录')
+  await expect(page.locator('body')).toContainText('纯前端解密')
+  await expect(page.locator('body')).toContainText('拖拽多个 .ncm 文件')
 })

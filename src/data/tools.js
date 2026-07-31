@@ -148,7 +148,7 @@ export const onlineCategories = [
       {
         name: 'NCM 解锁',
         url: '/tools/ncmdump',
-        description: '将 .ncm 加密音乐转为通用格式（需登录）'
+        description: '纯前端解密 .ncm 音乐，文件不上传'
       }
     ]
   }
