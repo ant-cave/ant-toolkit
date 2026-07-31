@@ -3,7 +3,7 @@
 <!-- https://github.com/ant-cave -->
 
 <script setup>
-// NCM 解锁工具：批量上传 .ncm 文件排队转换，实时显示进度与日志（需登录）
+// NCM 解锁工具：批量 .ncm 分片上传（5MB/片）+ 排队转换 + 进度与日志（需登录）
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRequestStore } from '../../stores/request'
 import ToolPage from '../../components/tools/ToolPage.vue'
@@ -22,12 +22,19 @@ import IconChevronUp from '~icons/tabler/chevron-up'
 
 const store = useRequestStore()
 
-// 待上传文件
+// ncm 魔数 CTENFDAM，用于选择时本地校验
+const NCM_MAGIC = [0x43, 0x54, 0x45, 0x4e, 0x46, 0x44, 0x41, 0x4d]
+// 分片大小：5MB（低于常见 nginx 上传上限，绕开 413）
+const CHUNK_SIZE = 5 * 1024 * 1024
+
+// 待上传文件列表 [{ id, file, size }]
 const fileInput = ref(null)
-const isDragover = ref(false)
 const files = ref([])
+const isDragover = ref(false)
 const submitting = ref(false)
 const submitErrors = ref([])
+// 上传进度：id -> { current, total }
+const uploadMap = ref({})
 
 // 任务列表
 const jobs = ref([])
@@ -36,35 +43,11 @@ const downloaded = ref(new Set())
 const error = ref('')
 
 let pollTimer = null
+let uidSeq = 0
 
-// ===== 文件选择 =====
-
-function pickNcm(list) {
-  return [...list].filter((f) => f.name.toLowerCase().endsWith('.ncm'))
-}
-
-function onDrop(e) {
-  isDragover.value = false
-  const picked = pickNcm(e.dataTransfer.files)
-  if (picked.length) {
-    files.value = [...files.value, ...picked]
-    error.value = ''
-  }
-}
-
-function onFileChange(e) {
-  const picked = pickNcm(e.target.files)
-  if (picked.length) files.value = [...files.value, ...picked]
-  e.target.value = ''
-}
-
-function removeFile(i) {
-  files.value.splice(i, 1)
-}
-
-function clearFiles() {
-  files.value = []
-  error.value = ''
+function uid() {
+  uidSeq += 1
+  return Date.now().toString(36) + '-' + uidSeq
 }
 
 function formatSize(b) {
@@ -73,47 +56,162 @@ function formatSize(b) {
   return (b / 1048576).toFixed(2) + ' MB'
 }
 
-// ===== 提交与轮询 =====
+// ===== 文件选择（带魔数校验）=====
+
+function readMagic(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(new Uint8Array(reader.result))
+    reader.onerror = () => resolve(null)
+    reader.readAsArrayBuffer(file.slice(0, 8))
+  })
+}
+
+async function addFiles(list) {
+  const invalid = []
+  const added = []
+  for (const f of [...list]) {
+    if (!f.name.toLowerCase().endsWith('.ncm')) {
+      invalid.push({ name: f.name, reason: '仅支持 .ncm 文件' })
+      continue
+    }
+    const bytes = await readMagic(f)
+    if (!bytes || bytes.length !== NCM_MAGIC.length || !NCM_MAGIC.every((b, i) => bytes[i] === b)) {
+      invalid.push({ name: f.name, reason: '不是有效的 .ncm 文件' })
+      continue
+    }
+    added.push({ id: uid(), file: f, size: f.size })
+  }
+  if (added.length) {
+    files.value = [...files.value, ...added]
+    error.value = ''
+  }
+  if (invalid.length) submitErrors.value = [...submitErrors.value, ...invalid]
+}
+
+function onDrop(e) {
+  isDragover.value = false
+  addFiles(e.dataTransfer.files)
+}
+
+function onFileChange(e) {
+  addFiles(e.target.files)
+  e.target.value = ''
+}
+
+function removeFile(item) {
+  files.value = files.value.filter((x) => x.id !== item.id)
+}
+
+function clearFiles() {
+  files.value = []
+  error.value = ''
+}
+
+// ===== 分片上传 =====
+
+function setUploadProgress(id, current, total) {
+  uploadMap.value = { ...uploadMap.value, [id]: { current, total } }
+}
+
+function clearUploadProgress(id) {
+  const m = { ...uploadMap.value }
+  delete m[id]
+  uploadMap.value = m
+}
+
+async function uploadChunk(uploadId, index, blob, retries = 3) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const fd = new FormData()
+      fd.append('index', String(index))
+      fd.append('chunk', blob, 'chunk.bin')
+      const res = await fetch(`/api/ncmdump/upload/${uploadId}/chunk`, { method: 'POST', body: fd, credentials: 'include' })
+      if (res.ok) return true
+    } catch { /* 网络异常，重试 */ }
+    if (attempt < retries) await new Promise((r) => setTimeout(r, 600 * (attempt + 1)))
+  }
+  return false
+}
 
 async function submit() {
   error.value = ''
   submitErrors.value = []
   if (!files.value.length) return
   submitting.value = true
+  const queue = [...files.value] // 快照，避免上传过程中列表变化影响遍历
+
   try {
-    const fd = new FormData()
-    for (const f of files.value) fd.append('files', f)
-    const res = await fetch('/api/ncmdump/jobs', { method: 'POST', body: fd, credentials: 'include' })
-    if (res.status === 401) {
-      error.value = '登录已过期，请重新登录'
-      return
+    for (const item of queue) {
+      // 1. 初始化上传会话
+      let res = await fetch('/api/ncmdump/upload/init', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: item.file.name, size: item.size, chunk_size: CHUNK_SIZE })
+      })
+      if (res.status === 401) {
+        error.value = '登录已过期，请重新登录'
+        return
+      }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        submitErrors.value.push({ name: item.file.name, reason: d.detail || ('初始化失败 ' + res.status) })
+        removeFile(item)
+        continue
+      }
+      const { upload_id: uploadId, chunk_size: chunkSize, total_chunks: totalChunks } = await res.json()
+
+      // 2. 逐片上传（带重试）
+      let uploadOk = true
+      for (let n = 0; n < totalChunks; n++) {
+        const start = n * chunkSize
+        const blob = item.file.slice(start, Math.min(start + chunkSize, item.size))
+        if (!(await uploadChunk(uploadId, n, blob))) {
+          uploadOk = false
+          break
+        }
+        setUploadProgress(item.id, n + 1, totalChunks)
+      }
+      if (!uploadOk) {
+        error.value = '上传失败：' + item.file.name
+        // 清理服务端残留分片
+        fetch(`/api/ncmdump/upload/${uploadId}`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
+        return
+      }
+
+      // 3. 合并并加入队列
+      res = await fetch(`/api/ncmdump/upload/${uploadId}/complete`, { method: 'POST', credentials: 'include' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        submitErrors.value.push({ name: item.file.name, reason: d.detail || ('提交失败 ' + res.status) })
+        removeFile(item)
+        clearUploadProgress(item.id)
+        continue
+      }
+      const data = await res.json()
+      jobs.value = [{ id: data.job_id, filename: data.filename, status: 'pending', progress: 0, size: item.size }, ...jobs.value]
+      removeFile(item)
+      clearUploadProgress(item.id)
     }
-    if (!res.ok) {
-      error.value = '提交失败（' + res.status + '）'
-      return
-    }
-    const data = await res.json()
-    submitErrors.value = data.errors || []
-    if (data.jobs && data.jobs.length) {
-      // 新任务插入到队列列表最前
-      jobs.value = [...data.jobs.map((j) => ({ ...j, progress: 0 })), ...jobs.value]
-      await refresh()
-      startPolling()
-    }
-    files.value = []
+
+    // 全部处理完，启动轮询
+    await refresh()
+    if (activeCount.value) startPolling()
   } catch (e) {
-    error.value = '提交失败：' + e.message
+    error.value = '上传失败：' + e.message
   } finally {
     submitting.value = false
   }
 }
+
+// ===== 任务轮询 =====
 
 async function refresh() {
   try {
     const res = await fetch('/api/ncmdump/jobs', { credentials: 'include' })
     if (!res.ok) return
     const data = await res.json()
-    // 按 id 合并，保持后端返回顺序
     const byId = new Map(jobs.value.map((j) => [j.id, j]))
     for (const job of data.jobs || []) byId.set(job.id, job)
     jobs.value = (data.jobs || []).map((j) => byId.get(j.id))
@@ -134,7 +232,6 @@ function stopPolling() {
 }
 
 onMounted(() => {
-  // 回到页面时恢复进行中的任务
   refresh()
 })
 
@@ -200,7 +297,7 @@ function canDownload(job) {
 </script>
 
 <template>
-  <ToolPage title="NCM 解锁" subtitle="批量 .ncm 转通用格式，排队转换（需登录）">
+  <ToolPage title="NCM 解锁" subtitle="批量 .ncm 转通用格式，分片上传排队转换（需登录）">
     <!-- 登录态检查中 -->
     <div v-if="store.authLoading" class="rounded-sm border border-neutral-200 bg-white p-10 text-center dark:border-neutral-700 dark:bg-neutral-900">
       <p class="text-sm text-neutral-400 dark:text-neutral-500">检查登录...</p>
@@ -233,7 +330,7 @@ function canDownload(job) {
         <template v-if="files.length === 0">
           <IconNetease class="mx-auto mb-3 h-10 w-10 text-neutral-400 dark:text-neutral-500" />
           <p class="text-sm text-neutral-600 dark:text-neutral-400">拖拽多个 .ncm 文件到此处，或点击选择</p>
-          <p class="mt-1 text-xs text-neutral-400 dark:text-neutral-500">支持批量排队转换，单文件上限 200MB</p>
+          <p class="mt-1 text-xs text-neutral-400 dark:text-neutral-500">支持批量排队转换，5MB 分片上传，单文件上限 200MB</p>
         </template>
         <template v-else>
           <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">已选择 {{ files.length }} 个文件</p>
@@ -241,34 +338,45 @@ function canDownload(job) {
         </template>
       </div>
 
-      <!-- 已选文件列表 -->
+      <!-- 已选文件列表（含上传进度） -->
       <div v-if="files.length" class="rounded-sm border border-neutral-200 bg-white p-3 dark:border-neutral-700 dark:bg-neutral-900">
-        <div
-          v-for="(f, i) in files"
-          :key="i"
-          class="flex items-center gap-2 px-1 py-1.5"
-        >
-          <IconMusic class="h-4 w-4 shrink-0 text-neutral-400 dark:text-neutral-500" />
-          <span class="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-200" :title="f.name">{{ f.name }}</span>
-          <span class="shrink-0 font-mono text-xs text-neutral-400 dark:text-neutral-500">{{ formatSize(f.size) }}</span>
-          <button
-            class="shrink-0 rounded-sm p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-            :title="'移除 ' + f.name"
-            @click.stop="removeFile(i)"
-          >
-            <IconTrash class="h-4 w-4" />
-          </button>
+        <div v-for="item in files" :key="item.id" class="px-1 py-1.5">
+          <div class="flex items-center gap-2">
+            <IconMusic class="h-4 w-4 shrink-0 text-neutral-400 dark:text-neutral-500" />
+            <span class="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-200" :title="item.file.name">{{ item.file.name }}</span>
+            <span class="shrink-0 font-mono text-xs text-neutral-400 dark:text-neutral-500">{{ formatSize(item.size) }}</span>
+            <!-- 上传中：进度；否则：移除 -->
+            <template v-if="submitting">
+              <span class="shrink-0 font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                {{ uploadMap[item.id] ? uploadMap[item.id].current + '/' + uploadMap[item.id].total : '...' }}
+              </span>
+            </template>
+            <button
+              v-else
+              class="shrink-0 rounded-sm p-1 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
+              :title="'移除 ' + item.file.name"
+              @click.stop="removeFile(item)"
+            >
+              <IconTrash class="h-4 w-4" />
+            </button>
+          </div>
+          <!-- 上传进度条 -->
+          <div v-if="submitting && uploadMap[item.id]" class="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+            <div
+              class="h-full rounded-full bg-neutral-900 transition-all duration-300 dark:bg-neutral-100"
+              :style="{ width: Math.round((uploadMap[item.id].current / uploadMap[item.id].total) * 100) + '%' }"
+            ></div>
+          </div>
         </div>
       </div>
 
       <!-- 操作按钮 -->
-      <div v-if="files.length" class="flex items-center gap-2">
+      <div v-if="files.length && !submitting" class="flex items-center gap-2">
         <button
           class="flex-1 rounded-sm bg-neutral-900 py-2.5 text-sm font-medium text-white transition-colors hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-200"
-          :disabled="submitting"
           @click="submit"
         >
-          {{ submitting ? '提交中...' : '开始转换（' + files.length + ' 个）' }}
+          开始转换（{{ files.length }} 个）
         </button>
         <button
           class="inline-flex items-center gap-1 rounded-sm border border-neutral-300 px-3 py-2.5 text-sm text-neutral-500 transition-colors hover:border-neutral-500 hover:text-neutral-700 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500 dark:hover:text-neutral-200"
@@ -277,6 +385,7 @@ function canDownload(job) {
           <IconTrash class="h-4 w-4" /> 清空
         </button>
       </div>
+      <p v-else-if="submitting" class="text-center text-xs text-neutral-400 dark:text-neutral-500">分片上传中，完成后自动进入转换队列...</p>
 
       <!-- 全局提示 -->
       <p v-if="error" class="rounded-sm border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100">
@@ -287,7 +396,7 @@ function canDownload(job) {
         class="rounded-sm border border-neutral-200 bg-white px-3 py-2 text-xs text-neutral-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
       >
         有 {{ submitErrors.length }} 个文件未加入队列：
-        <span v-for="(e, i) in submitErrors" :key="i">「{{ e.filename }}」{{ e.reason }}；</span>
+        <span v-for="(e, i) in submitErrors" :key="i">「{{ e.name }}」{{ e.reason }}；</span>
       </p>
 
       <!-- 任务队列 -->
@@ -300,7 +409,6 @@ function canDownload(job) {
               <span v-if="activeCount">（还有 {{ activeCount }} 个在处理）</span>
             </span>
           </div>
-          <!-- 总体进度条 -->
           <div class="h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
             <div
               class="h-full rounded-full bg-neutral-900 transition-all duration-500 dark:bg-neutral-100"
@@ -332,7 +440,6 @@ function canDownload(job) {
               {{ statusMeta[job.status] ? statusMeta[job.status].label : job.status }}
             </span>
 
-            <!-- 操作 -->
             <button
               v-if="canDownload(job)"
               class="inline-flex shrink-0 items-center gap-1 rounded-sm border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 transition-colors hover:border-neutral-500 hover:text-neutral-900 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500 dark:hover:text-neutral-200"
