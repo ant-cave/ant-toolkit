@@ -134,6 +134,70 @@ async function uploadChunk(uploadId, index, blob, retries = 3) {
   return false
 }
 
+// 并发上传的 worker 池：最多 limit 个文件同时上传，任一个完成即进队列转换
+async function mapLimit(items, limit, fn) {
+  let i = 0
+  const results = []
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++
+      results[idx] = await fn(items[idx])
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
+async function uploadOne(item) {
+  // 1. 初始化上传会话
+  let res = await fetch('/api/ncmdump/upload/init', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: item.file.name, size: item.size, chunk_size: CHUNK_SIZE })
+  })
+  if (res.status === 401) {
+    error.value = '登录已过期，请重新登录'
+    return
+  }
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}))
+    submitErrors.value.push({ name: item.file.name, reason: d.detail || ('初始化失败 ' + res.status) })
+    removeFile(item)
+    return
+  }
+  const { upload_id: uploadId, chunk_size: chunkSize, total_chunks: totalChunks } = await res.json()
+
+  // 2. 逐片上传（带重试）
+  for (let n = 0; n < totalChunks; n++) {
+    const start = n * chunkSize
+    const blob = item.file.slice(start, Math.min(start + chunkSize, item.size))
+    if (!(await uploadChunk(uploadId, n, blob))) {
+      error.value = '上传失败：' + item.file.name
+      // 清理服务端残留分片
+      fetch(`/api/ncmdump/upload/${uploadId}`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
+      return
+    }
+    setUploadProgress(item.id, n + 1, totalChunks)
+  }
+
+  // 3. 合并并加入队列（上传完成即触发轮询，转换与其它文件上传互不影响）
+  res = await fetch(`/api/ncmdump/upload/${uploadId}/complete`, { method: 'POST', credentials: 'include' })
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}))
+    submitErrors.value.push({ name: item.file.name, reason: d.detail || ('提交失败 ' + res.status) })
+    removeFile(item)
+    clearUploadProgress(item.id)
+    return
+  }
+  const data = await res.json()
+  jobs.value = [{ id: data.job_id, filename: data.filename, status: 'pending', progress: 0, size: item.size }, ...jobs.value]
+  removeFile(item)
+  clearUploadProgress(item.id)
+  startPolling()
+}
+
 async function submit() {
   error.value = ''
   submitErrors.value = []
@@ -142,66 +206,31 @@ async function submit() {
   const queue = [...files.value] // 快照，避免上传过程中列表变化影响遍历
 
   try {
-    for (const item of queue) {
-      // 1. 初始化上传会话
-      let res = await fetch('/api/ncmdump/upload/init', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: item.file.name, size: item.size, chunk_size: CHUNK_SIZE })
-      })
-      if (res.status === 401) {
-        error.value = '登录已过期，请重新登录'
-        return
-      }
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        submitErrors.value.push({ name: item.file.name, reason: d.detail || ('初始化失败 ' + res.status) })
-        removeFile(item)
-        continue
-      }
-      const { upload_id: uploadId, chunk_size: chunkSize, total_chunks: totalChunks } = await res.json()
-
-      // 2. 逐片上传（带重试）
-      let uploadOk = true
-      for (let n = 0; n < totalChunks; n++) {
-        const start = n * chunkSize
-        const blob = item.file.slice(start, Math.min(start + chunkSize, item.size))
-        if (!(await uploadChunk(uploadId, n, blob))) {
-          uploadOk = false
-          break
-        }
-        setUploadProgress(item.id, n + 1, totalChunks)
-      }
-      if (!uploadOk) {
-        error.value = '上传失败：' + item.file.name
-        // 清理服务端残留分片
-        fetch(`/api/ncmdump/upload/${uploadId}`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
-        return
-      }
-
-      // 3. 合并并加入队列
-      res = await fetch(`/api/ncmdump/upload/${uploadId}/complete`, { method: 'POST', credentials: 'include' })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        submitErrors.value.push({ name: item.file.name, reason: d.detail || ('提交失败 ' + res.status) })
-        removeFile(item)
-        clearUploadProgress(item.id)
-        continue
-      }
-      const data = await res.json()
-      jobs.value = [{ id: data.job_id, filename: data.filename, status: 'pending', progress: 0, size: item.size }, ...jobs.value]
-      removeFile(item)
-      clearUploadProgress(item.id)
-    }
-
-    // 全部处理完，启动轮询
+    // 最多 3 个文件并发上传，任一完成立即进入转换队列
+    await mapLimit(queue, 3, uploadOne)
     await refresh()
     if (activeCount.value) startPolling()
   } catch (e) {
     error.value = '上传失败：' + e.message
   } finally {
     submitting.value = false
+  }
+}
+
+// ===== 打包下载 =====
+
+async function downloadArchive() {
+  try {
+    const res = await fetch('/api/ncmdump/archive.zip', { credentials: 'include' })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      error.value = d.detail || ('打包失败 ' + res.status)
+      return
+    }
+    const blob = await res.blob()
+    triggerDownload(blob, 'ncm_outputs.zip')
+  } catch (e) {
+    error.value = '打包失败：' + e.message
   }
 }
 
@@ -265,12 +294,25 @@ async function cancelJob(job) {
   } catch { /* 忽略 */ }
 }
 
+// 触发下载并延迟释放 blob URL（立即 revoke 会导致大文件下载被浏览器中断）
+function triggerDownload(blob, name) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 60000)
+}
+
 async function downloadJob(job) {
   if (downloaded.value.has(job.id)) return
   try {
     const res = await fetch(job.download_url, { credentials: 'include' })
     if (!res.ok) {
-      error.value = '下载失败，请刷新任务列表重试'
+      error.value = '结果已过期（保留 1 小时），请重新转换'
       await refresh()
       return
     }
@@ -279,12 +321,7 @@ async function downloadJob(job) {
     const unicode = cd.match(/filename\*=UTF-8''([^;]+)/i)
     const ascii = cd.match(/filename="([^"]+)"/i)
     const name = unicode ? decodeURIComponent(unicode[1]) : ascii ? ascii[1] : job.result_filename || 'output'
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name
-    a.click()
-    URL.revokeObjectURL(url)
+    triggerDownload(blob, name)
     downloaded.value.add(job.id)
   } catch (e) {
     error.value = '下载失败：' + e.message
@@ -293,6 +330,12 @@ async function downloadJob(job) {
 
 function canDownload(job) {
   return job.status === 'done' && job.download_url && !downloaded.value.has(job.id)
+}
+
+// 输出格式（flac / mp3 / ogg）
+function formatOf(job) {
+  const m = /\.([a-z0-9]+)$/i.exec(job.result_filename || '')
+  return m ? m[1].toUpperCase() : ''
 }
 </script>
 
@@ -404,10 +447,19 @@ function canDownload(job) {
         <div class="rounded-sm border border-neutral-200 bg-white p-4 dark:border-neutral-700 dark:bg-neutral-900">
           <div class="mb-2 flex items-center justify-between gap-2">
             <span class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">转换队列</span>
-            <span class="font-mono text-xs text-neutral-500 dark:text-neutral-400">
-              {{ doneCount }} / {{ jobs.length }}
-              <span v-if="activeCount">（还有 {{ activeCount }} 个在处理）</span>
-            </span>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="doneCount > 0"
+                class="inline-flex items-center gap-1 rounded-sm border border-neutral-300 px-2.5 py-1 text-xs text-neutral-600 transition-colors hover:border-neutral-500 hover:text-neutral-900 dark:border-neutral-700 dark:text-neutral-400 dark:hover:border-neutral-500 dark:hover:text-neutral-200"
+                @click="downloadArchive"
+              >
+                <IconDownload class="h-3.5 w-3.5" /> 打包下载 ZIP
+              </button>
+              <span class="font-mono text-xs text-neutral-500 dark:text-neutral-400">
+                {{ doneCount }} / {{ jobs.length }}
+                <span v-if="activeCount">（还有 {{ activeCount }} 个在处理）</span>
+              </span>
+            </div>
           </div>
           <div class="h-2 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
             <div
@@ -435,6 +487,13 @@ function canDownload(job) {
               }"
             />
             <span class="min-w-0 flex-1 truncate text-sm text-neutral-800 dark:text-neutral-200" :title="job.filename">{{ job.filename }}</span>
+            <!-- 输出格式徽标 -->
+            <span
+              v-if="job.status === 'done' && formatOf(job)"
+              class="shrink-0 rounded-sm border border-neutral-300 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-neutral-600 dark:border-neutral-600 dark:text-neutral-300"
+            >
+              {{ formatOf(job) }}
+            </span>
             <span class="shrink-0 font-mono text-xs text-neutral-400 dark:text-neutral-500">{{ formatSize(job.size || 0) }}</span>
             <span class="shrink-0 text-xs text-neutral-500 dark:text-neutral-400">
               {{ statusMeta[job.status] ? statusMeta[job.status].label : job.status }}

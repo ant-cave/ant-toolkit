@@ -18,6 +18,10 @@ export default defineConfig({
     vueDevTools(),
     Icons({ compiler: 'vue3' }),
   ],
+  // 生成 sourcemap 但不暴露 sourcemap 文件 URL（开源项目便于调试又不会触发额外加载）
+  build: {
+    sourcemap: 'hidden',
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
