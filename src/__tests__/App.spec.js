@@ -20,6 +20,13 @@ function makeRouter() {
       { path: '/about', component: () => import('../views/AboutView.vue') },
       { path: '/tools/curl', component: () => import('../views/CurlToolView.vue') },
       { path: '/tools/jpg-compress', component: () => import('../views/JpgCompressView.vue') },
+      { path: '/tools/json-formatter', component: () => import('../views/tools/JsonFormatterView.vue') },
+      { path: '/tools/base-convert', component: () => import('../views/tools/BaseConvertView.vue') },
+      { path: '/tools/encode-decode', component: () => import('../views/tools/EncodeDecodeView.vue') },
+      { path: '/tools/text', component: () => import('../views/tools/TextView.vue') },
+      { path: '/tools/uuid', component: () => import('../views/tools/UuidView.vue') },
+      { path: '/tools/unit-convert', component: () => import('../views/tools/UnitConvertView.vue') },
+      { path: '/tools/date-calc', component: () => import('../views/tools/DateCalcView.vue') },
     ],
   })
 }
@@ -94,5 +101,25 @@ describe('App', () => {
 
     expect(wrapper.text()).toContain('JPG 压缩')
     expect(wrapper.text()).toContain('支持批量压缩')
+  })
+
+  it.each([
+    ['/tools/json-formatter', 'JSON 格式化'],
+    ['/tools/base-convert', '进制转换'],
+    ['/tools/encode-decode', '编解码'],
+    ['/tools/text', '文本处理'],
+    ['/tools/uuid', 'UUID 生成'],
+    ['/tools/unit-convert', '单位换算'],
+    ['/tools/date-calc', '日期计算器'],
+  ])('小工具页 %s 可访问', async (path, title) => {
+    const router = makeRouter()
+    const wrapper = mount(App, {
+      global: { plugins: [router, createPinia()] },
+    })
+    await router.isReady()
+    await router.push(path)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(title)
   })
 })

@@ -14,6 +14,7 @@ const themeStore = useThemeStore()
 <template>
   <button
     type="button"
+    data-testid="theme-toggle"
     :title="themeStore.isDark ? '切换到亮色模式' : '切换到暗色模式'"
     class="rounded-sm p-1.5 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
     @click="themeStore.toggle()"

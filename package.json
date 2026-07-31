@@ -11,7 +11,11 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "diff": "^9.0.0",
+    "js-md5": "^0.9.2",
+    "marked": "^18.0.7",
     "pinia": "^4.0.2",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
   },

@@ -28,7 +28,7 @@ test('theme toggle switches to dark mode', async ({ page }) => {
   await page.goto('/')
   // 初始跟随系统，若已是暗色则先切到亮色
   const isDark = await page.evaluate(() => document.documentElement.classList.contains('dark'))
-  await page.getByRole('button').click()
+  await page.getByTestId('theme-toggle').click()
   if (isDark) {
     await expect(page.locator('html')).not.toHaveClass(/dark/)
   } else {
@@ -48,4 +48,25 @@ test('navigates to jpg compress tool', async ({ page }) => {
   await page.getByRole('link', { name: /JPG 压缩/ }).click()
   await expect(page.locator('body')).toContainText('图片压缩工具')
   await expect(page.locator('body')).toContainText('支持批量压缩')
+})
+
+test('navigates to qrcode tool', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: /二维码生成/ }).click()
+  await expect(page.locator('body')).toContainText('文本 / 链接转二维码')
+  await expect(page.locator('body')).toContainText('下载 PNG')
+})
+
+test('navigates to markdown preview tool', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: /Markdown 预览/ }).click()
+  await expect(page.locator('body')).toContainText('实时渲染')
+  await expect(page.locator('body')).toContainText('复制 HTML')
+})
+
+test('navigates to password generator tool', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('link', { name: /随机密码/ }).click()
+  await expect(page.locator('body')).toContainText('安全随机密码生成器')
+  await expect(page.locator('body')).toContainText('密码长度')
 })
