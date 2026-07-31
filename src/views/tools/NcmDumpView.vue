@@ -27,6 +27,14 @@ const NCM_MAGIC = [0x43, 0x54, 0x45, 0x4e, 0x46, 0x44, 0x41, 0x4d]
 // 分片大小：5MB（低于常见 nginx 上传上限，绕开 413）
 const CHUNK_SIZE = 5 * 1024 * 1024
 
+// 页面会话标识：每次加载本页都重新生成，后端据此隔离任务缓存
+// —— 刷新页面后 cid 变化，同账号看到的队列也是空的（24h 兜底清理）
+const cid = Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+
+function ncmUrl(path) {
+  return `${path}${path.includes('?') ? '&' : '?'}cid=${cid}`
+}
+
 // 待上传文件列表 [{ id, file, size }]
 const fileInput = ref(null)
 const files = ref([])
@@ -126,7 +134,7 @@ async function uploadChunk(uploadId, index, blob, retries = 3) {
       const fd = new FormData()
       fd.append('index', String(index))
       fd.append('chunk', blob, 'chunk.bin')
-      const res = await fetch(`/api/ncmdump/upload/${uploadId}/chunk`, { method: 'POST', body: fd, credentials: 'include' })
+      const res = await fetch(ncmUrl(`/api/ncmdump/upload/${uploadId}/chunk`), { method: 'POST', body: fd, credentials: 'include' })
       if (res.ok) return true
     } catch { /* 网络异常，重试 */ }
     if (attempt < retries) await new Promise((r) => setTimeout(r, 600 * (attempt + 1)))
@@ -151,7 +159,7 @@ async function mapLimit(items, limit, fn) {
 
 async function uploadOne(item) {
   // 1. 初始化上传会话
-  let res = await fetch('/api/ncmdump/upload/init', {
+  let res = await fetch(ncmUrl('/api/ncmdump/upload/init'), {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -176,14 +184,14 @@ async function uploadOne(item) {
     if (!(await uploadChunk(uploadId, n, blob))) {
       error.value = '上传失败：' + item.file.name
       // 清理服务端残留分片
-      fetch(`/api/ncmdump/upload/${uploadId}`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
+      fetch(ncmUrl(`/api/ncmdump/upload/${uploadId}`), { method: 'DELETE', credentials: 'include' }).catch(() => {})
       return
     }
     setUploadProgress(item.id, n + 1, totalChunks)
   }
 
   // 3. 合并并加入队列（上传完成即触发轮询，转换与其它文件上传互不影响）
-  res = await fetch(`/api/ncmdump/upload/${uploadId}/complete`, { method: 'POST', credentials: 'include' })
+  res = await fetch(ncmUrl(`/api/ncmdump/upload/${uploadId}/complete`), { method: 'POST', credentials: 'include' })
   if (!res.ok) {
     const d = await res.json().catch(() => ({}))
     submitErrors.value.push({ name: item.file.name, reason: d.detail || ('提交失败 ' + res.status) })
@@ -240,7 +248,7 @@ async function directDownload(url) {
 }
 
 async function downloadArchive() {
-  const head = await directDownload('/api/ncmdump/archive.zip')
+  const head = await directDownload(ncmUrl('/api/ncmdump/archive.zip'))
   if (!head) {
     error.value = '打包失败：网络错误'
     return
@@ -260,7 +268,7 @@ async function downloadArchive() {
 
 async function refresh() {
   try {
-    const res = await fetch('/api/ncmdump/jobs', { credentials: 'include' })
+    const res = await fetch(ncmUrl('/api/ncmdump/jobs'), { credentials: 'include' })
     if (!res.ok) return
     const data = await res.json()
     const byId = new Map(jobs.value.map((j) => [j.id, j]))
@@ -311,14 +319,14 @@ function toggleLog(job) {
 
 async function cancelJob(job) {
   try {
-    await fetch(`/api/ncmdump/jobs/${job.id}/cancel`, { method: 'POST', credentials: 'include' })
+    await fetch(ncmUrl(`/api/ncmdump/jobs/${job.id}/cancel`), { method: 'POST', credentials: 'include' })
     await refresh()
   } catch { /* 忽略 */ }
 }
 
 async function downloadJob(job) {
   if (downloaded.value.has(job.id)) return
-  const head = await directDownload(job.download_url)
+  const head = await directDownload(ncmUrl(job.download_url))
   if (!head || !head.ok) {
     error.value = '结果已过期（保留 1 小时），请重新转换'
     await refresh()
