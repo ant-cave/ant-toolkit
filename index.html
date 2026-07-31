@@ -1,12 +1,24 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 ant-cave <ANTmmmmm@outlook.com> -->
+<!-- https://github.com/ant-cave -->
+
 <!DOCTYPE html>
-<html lang="">
+<html lang="zh-CN">
   <head>
-    <meta charset="UTF-8">
-    <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vite App</title>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ant-toolkit</title>
+    <script>
+      // 应用启动前根据本地偏好或系统主题设置暗色模式，避免页面闪烁
+      ;(function () {
+        var saved = localStorage.getItem('toolkit-theme')
+        var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.classList.toggle('dark', dark)
+      })()
+    </script>
   </head>
-  <body>
+  <body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
     <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>

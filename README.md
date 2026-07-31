@@ -1,23 +1,24 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Copyright (C) 2026 ant-cave <ANTmmmmm@outlook.com> -->
+<!-- https://github.com/ant-cave -->
+
 # ant-toolkit
 
-This template should help get you started developing with Vue 3 in Vite.
+工具箱导航站：在线网页可用的工具箱与本地部署的工具箱导航，参照 fastcurl 简约黑白灰配色，支持亮色 / 暗色模式。
 
-## Recommended IDE Setup
+## 技术栈
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+- Vue 3（Composition API + `<script setup>`）
+- Vite
+- Tailwind CSS
+- Pinia
+- Vitest / Playwright
 
-## Recommended Browser Setup
+## 项目结构
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd)
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
-
-## Customize configuration
-
-See [Vite Configuration Reference](https://vite.dev/config/).
+- `src/data/tools.js` — 工具箱导航数据（在线 / 本地分类与链接），直接编辑此文件维护链接
+- `src/data/profile.js` — 个人信息配置（更多信息页面）
+- `src/views/` — 在线工具 / 本地部署 / 更多信息 三个页面
 
 ## Project Setup
 
@@ -37,27 +38,22 @@ pnpm dev
 pnpm build
 ```
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
+### Run Unit Tests with Vitest
 
 ```sh
 pnpm test:unit
 ```
 
-### Run End-to-End Tests with [Playwright](https://playwright.dev)
+### Run End-to-End Tests with Playwright
 
 ```sh
-# Install browsers for the first run
+# 安装浏览器（首次运行）
 npx playwright install
 
-# When testing on CI, must build the project first
-pnpm build
-
-# Runs the end-to-end tests
-pnpm test:e2e
-# Runs the tests only on Chromium
-pnpm test:e2e --project=chromium
-# Runs the tests of a specific file
-pnpm test:e2e tests/example.spec.ts
-# Runs the tests in debug mode
-pnpm test:e2e --debug
+# 运行 e2e 测试（CI 模式使用 preview 服务）
+CI=true pnpm test:e2e --project=chromium
 ```
+
+## License
+
+[GNU Affero General Public License v3.0](LICENSE)
